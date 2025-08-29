@@ -35,7 +35,7 @@
 - TTS dosyası `static/tts_output.wav` olarak kaydedilir.
 
 ## Gereksinimler
-- Python 3.8+
+- Python 3.11
 - Vosk STT modeli (Türkçe)
 - Coqui TTS
 - Flask
