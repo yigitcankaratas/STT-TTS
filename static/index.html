@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Türkçe Speech-to-Text (Vosk)</title>
+</head>
+<body>
+  <h1>🎤 Türkçe Konuş → Yazıya Dönüştür</h1>
+  <button onclick="startRecording()">Başlat</button>
+  <button onclick="stopRecording()">Durdur</button>
+  <div>
+    <h3>Anlık (Partial):</h3>
+    <pre id="partial"></pre>
+  </div>
+  <div>
+    <h3>Sonuç (Text):</h3>
+    <pre id="text"></pre>
+  </div>
+  <div>
+    
+  </div>
+    <h3>Metinden Sese (TTS):</h3>
+    <input type="text" id="ttsInput" placeholder="Metni girin..." style="width:300px;">
+    <button onclick="sendTTS()">TTS Oynat</button>
+  <audio id="ttsAudio" controls style="display:none;"></audio>
+  <div id="ttsError" style="color:red;display:none;"></div>
+  </div>
+
+  <script>
+  let socket;
+  let audioContext;
+  let processor;
+  let input;
+  let textResults = [];
+
+    function downsampleBuffer(buffer, inputSampleRate = 48000, outputSampleRate = 16000) {
+      if (outputSampleRate === inputSampleRate) {
+        return buffer;
+      }
+      const sampleRateRatio = inputSampleRate / outputSampleRate;
+      const newLength = Math.round(buffer.length / sampleRateRatio);
+      const result = new Float32Array(newLength);
+      let offsetResult = 0;
+      let offsetBuffer = 0;
+      while (offsetResult < result.length) {
+        const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+        let accum = 0, count = 0;
+        for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+          accum += buffer[i];
+          count++;
+        }
+        result[offsetResult] = accum / count;
+        offsetResult++;
+        offsetBuffer = nextOffsetBuffer;
+      }
+      return result;
+    }
+
+    function startRecording() {
+      socket = new WebSocket("ws://localhost:2700");
+
+      socket.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch (e) {
+          data = {};
+        }
+        if (data.partial) {
+          document.getElementById("partial").innerText = data.partial;
+        }
+        if (data.text) {
+          textResults.push(data.text);
+          document.getElementById("text").innerText = textResults.join("\n");
+        }
+        if (data.tts_path) {
+          // TTS dosyasını oynat
+          const audioElem = document.getElementById("ttsAudio");
+          // Sunucu portunu 5000 olarak ayarla
+          audioElem.src = "http://localhost:5000/static/tts_output.wav" + "?" + new Date().getTime(); // cache bust
+          audioElem.style.display = "block";
+          audioElem.play();
+          document.getElementById("ttsError").style.display = "none";
+        }
+        if (data.tts_error) {
+          const errDiv = document.getElementById("ttsError");
+          errDiv.innerText = data.tts_error;
+          errDiv.style.display = "block";
+        }
+      };
+
+      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+        audioContext = new AudioContext({ sampleRate: 48000 }); // Chrome genelde 48kHz açar
+        const source = audioContext.createMediaStreamSource(stream);
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (e) => {
+          let inputData = e.inputBuffer.getChannelData(0);
+
+          // Downsample 48kHz → 16kHz
+          inputData = downsampleBuffer(inputData, audioContext.sampleRate, 16000);
+
+          const buffer = new ArrayBuffer(inputData.length * 2);
+          const view = new DataView(buffer);
+          let offset = 0;
+          for (let i = 0; i < inputData.length; i++, offset += 2) {
+            let s = Math.max(-1, Math.min(1, inputData[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+          }
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(buffer);
+          }
+        };
+      });
+    }
+
+    function sendTTS() {
+      const ttsText = document.getElementById("ttsInput").value;
+      if (socket && socket.readyState === WebSocket.OPEN && ttsText.trim()) {
+        socket.send(JSON.stringify({ type: "tts", text: ttsText }));
+      }
+    }
+
+    function stopRecording() {
+      if (processor) {
+        processor.disconnect();
+        processor = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+      }
+      if (socket) {
+        socket.close();
+      }
+    }
+  </script>
+</body>
+</html>
